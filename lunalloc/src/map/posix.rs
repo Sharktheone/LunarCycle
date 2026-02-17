@@ -5,7 +5,7 @@
 pub fn map(size: usize) -> Option<*mut u8> {
     unsafe {
         let ptr = libc::mmap(
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
             size,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
