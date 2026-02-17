@@ -21,7 +21,7 @@ pub fn map(size: usize) -> Option<*mut u8> {
     }
 }
 
-pub fn unmap(ptr: *mut u8, size: usize) -> bool {
+pub unsafe fn unmap(ptr: *mut u8, size: usize) -> bool {
     if ptr.is_null() {
         // core::hint::cold_path();
         return false;

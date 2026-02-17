@@ -1,3 +1,5 @@
+use libc::malloc;
+
 #[cfg(target_family = "windows")]
 mod windows;
 #[cfg(target_family = "unix")]
@@ -28,13 +30,13 @@ pub fn map(size: usize) -> Option<*mut u8> {
     }
 }
 
-pub fn unmap(ptr: *mut u8, size: usize) -> bool {
+pub unsafe fn unmap(ptr: *mut u8, size: usize) -> bool {
     #[cfg(target_family = "windows")]
-    {
+    unsafe {
         windows::unmap(ptr, size)
     }
     #[cfg(target_family = "unix")]
-    {
+    unsafe {
         posix::unmap(ptr, size)
     }
 
