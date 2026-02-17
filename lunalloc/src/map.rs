@@ -1,46 +1,48 @@
-use libc::malloc;
 
-#[cfg(target_family = "windows")]
+#[cfg(windows)]
 mod windows;
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 mod posix;
 
 
 
 pub fn map(size: usize) -> Option<*mut u8> {
-    #[cfg(target_family = "windows")]
+    #[cfg(windows)]
     {
         windows::map(size)
     }
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     {
         posix::map(size)
     }
 
-    #[cfg(not(any(target_family = "windows", target_family = "unix")))]
+    #[cfg(not(any(windows, unix)))]
     unsafe {
-        let ptr = malloc(size);
+        use alloc::alloc;
+        let layout = alloc::Layout::from_size_align(size, 1).ok()?;
+
+        let ptr = alloc::alloc_zeroed(layout);
 
         if ptr.is_null() {
             // core::hint::cold_path();
             None
         } else {
-            Some(ptr as *mut u8)
+            Some(ptr)
         }
     }
 }
 
 pub unsafe fn unmap(ptr: *mut u8, size: usize) -> bool {
-    #[cfg(target_family = "windows")]
+    #[cfg(windows)]
     unsafe {
         windows::unmap(ptr, size)
     }
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     unsafe {
         posix::unmap(ptr, size)
     }
 
-    #[cfg(not(any(target_family = "windows", target_family = "unix")))]
+    #[cfg(not(any(windows, unix)))]
     {
         if ptr.is_null() {
             // core::hint::cold_path();
