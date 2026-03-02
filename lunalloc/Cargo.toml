@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 
 
-[target.'cfg(target_family = "windows")'.dependencies]
-winapi = { version = "0.3.9", features = ["sysinfoapi"] }
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["sysinfoapi", "memoryapi", "winnt", "minwindef"] }
 
-[target.'cfg(target_family = "unix")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2.182"
