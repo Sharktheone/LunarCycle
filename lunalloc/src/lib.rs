@@ -2,6 +2,6 @@
 #[cfg(not(any(windows, unix)))]
 extern crate alloc;
 
-pub mod map;
+pub mod os;
 mod page;
 mod page_size;
