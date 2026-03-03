@@ -1,0 +1,295 @@
+use core::{num::{NonZero, NonZeroUsize}, ptr::NonNull};
+
+use crate::{bitmap::Bitmap, os};
+
+const POOL_SIZE: usize = 4 * 1024usize.pow(3);
+const PAGE_SIZE: usize = 16384;
+const NUM_PAGES: usize = POOL_SIZE / PAGE_SIZE;
+const NUM_GROUPS: usize = 512;
+const GROUP_SIZE: usize = NUM_PAGES / NUM_GROUPS;
+
+const GROUPS_BITMAP_SIZE: usize = NUM_GROUPS.div_ceil(64);
+const GROUP_BITMAP_SIZE: usize = GROUP_SIZE.div_ceil(64);
+
+type Memory = [PageGroup; NUM_GROUPS];
+
+
+pub struct OsPool {
+    ptr: NonNull<Memory>,
+    
+    free: Bitmap<GROUPS_BITMAP_SIZE>,
+    allocated: Bitmap<GROUPS_BITMAP_SIZE>,
+    
+    next: Option<NonNull<Self>>
+}
+
+impl OsPool {
+    pub fn new() -> Option<Self> {
+        let size = NonZeroUsize::new(POOL_SIZE)?;
+        
+        let ptr = unsafe { os::reserve(size) }?;
+        
+        Some(Self {
+            ptr: ptr.cast(),
+            free: Bitmap::all(),
+            allocated: Bitmap::new(),
+            next: None,
+        })
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.free.first_zero() >= NUM_GROUPS
+    }
+    
+    pub fn has_allocated(&self) -> bool {
+        self.allocated.first_zero() >= NUM_GROUPS
+    }
+    
+    pub fn group(&self, group: usize) -> Option<NonNull<PageGroup>> {
+        if group >= NUM_GROUPS {
+            // core::hint::cold_path();
+            if let Some(next) = self.next {
+                return unsafe { next.as_ref().group(group - NUM_GROUPS) };
+            } else {
+                // core::hint::cold_path();
+                return None;
+            }
+        }
+        
+        Some(unsafe { self.ptr.cast::<PageGroup>().add(group) })
+    }
+    
+    pub fn page(&self, group: usize, page: NonZeroUsize) -> Option<NonNull<Page>> {
+        if page.get() >= GROUP_SIZE {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        let page_ptr = self.group(group)?.cast::<Page>();
+        
+        
+        Some(unsafe { page_ptr.add(page.get()) })
+    }
+    
+    pub unsafe fn commit_group(&mut self, group: usize, pages: usize) -> Option<()> {
+        let commit_size = pages.max(1) * PAGE_SIZE;
+        
+        let mut group_ptr = self.group(group)?;
+        
+        
+        
+        let success = unsafe { 
+            // Safety: commit_size is guaranteed to be non-zero
+            let commit_size = NonZeroUsize::new_unchecked(commit_size);
+            
+            os::commit(group_ptr.cast(), commit_size)
+        };
+        
+        // Safety: the ptr is aligned and non-null, plus there are no other references.
+        unsafe { group_ptr.as_mut() }.header.free.set_all();
+        
+        self.allocated.set(group, true);
+        
+        if !success {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        
+        
+        Some(())
+    }
+    
+    pub unsafe fn decommit_group(&mut self, group: usize) -> Option<()> {
+        let group_ptr = self.group(group)?;
+        
+        let size = NonZeroUsize::new(size_of::<PageGroup>())?;
+        
+        let success = unsafe { os::decommit(group_ptr.cast(), size) };
+        
+        if !success {
+            return None;
+        }
+        
+        self.allocated.set(group, false);
+        
+        
+        Some(())
+    }
+    
+    
+    pub unsafe fn commit_page(&mut self, group: usize, page: NonZeroUsize) -> Option<()> {
+        let mut group_ptr = self.group(group)?;
+        let page_ptr = self.page(group, page)?;
+        
+        let size = NonZeroUsize::new(PAGE_SIZE)?;
+        
+        let success = unsafe { os::commit(page_ptr.cast(), size) };
+        
+        if !success {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        // Safety: the ptr is aligned and non-null, plus there are no other references.
+        let header = unsafe { &mut group_ptr.as_mut().header };
+        header.free.set(page.get(), true);
+        header.allocated.set(page.get(), true);
+        
+        
+        Some(())
+    }
+    
+    pub unsafe fn commit_pages(&mut self, group: usize, page: NonZeroUsize, count: NonZeroUsize) -> Option<()> {
+        let mut group_ptr = self.group(group)?;
+        let page_ptr = self.page(group, page)?;
+        
+        let size = NonZeroUsize::new(count.get() * PAGE_SIZE)?;
+        
+        let success = unsafe { os::commit(page_ptr.cast(), size) };
+        
+        if !success {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        // Safety: the ptr is aligned and non-null, plus there are no other references.
+        let header = unsafe { &mut group_ptr.as_mut().header };
+        header.free.set_bits(page.get(), count.get(), true);
+        header.allocated.set_bits(page.get(), count.get(), true);
+        
+        Some(())
+    }
+    
+    pub unsafe fn decommit_page(&mut self, group: usize, page: NonZeroUsize) -> Option<()> {
+        let page_ptr = self.page(group, page)?;
+        
+        let size = NonZeroUsize::new(PAGE_SIZE)?;
+        
+        let success = unsafe { os::decommit(page_ptr.cast(), size) };
+        
+        if !success {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        // Safety: the ptr is aligned and non-null, plus there are no other references.
+        let header = unsafe { &mut self.group(group)?.as_mut().header };
+        header.free.set(page.get(), true);
+        header.allocated.set(page.get(), false);
+        
+        Some(())
+    }
+    
+    pub unsafe fn decommit_pages(&mut self, group: usize, page: NonZeroUsize, count: NonZeroUsize) -> Option<()> {
+        let page_ptr = self.page(group, page)?;
+        
+        let size = NonZeroUsize::new(count.get() * PAGE_SIZE)?;
+        
+        let success = unsafe { os::decommit(page_ptr.cast(), size) };
+        
+        if !success {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        // Safety: the ptr is aligned and non-null, plus there are no other references.
+        let header = unsafe { &mut self.group(group)?.as_mut().header };
+        header.free.set_bits(page.get(), count.get(), true);
+        header.allocated.set_bits(page.get(), count.get(), false);
+        
+        Some(())
+    }
+    
+    pub fn last_pool(&mut self) -> &mut Self {
+        let mut current = self;
+        
+        while let Some(mut next) = current.next {
+            current = unsafe { next.as_mut() };
+        }
+        
+        current
+    }
+    
+    pub unsafe fn release_all(&mut self) -> Option<()> {
+        #[cfg(unix)]
+        let size = NonZeroUsize::new(POOL_SIZE)?;
+        
+        let success = unsafe { os::release(self.ptr.cast(), #[cfg(unix)] size) };
+        
+        if !success {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        Some(())
+    }
+    
+    pub fn extend(&mut self, alloc: &mut impl ExtendAlloc) -> Option<()> {
+        let last = self.last_pool();
+        let new_pool = Self::new()?;
+        
+        let ptr = alloc.alloc(new_pool)?;
+        last.next = Some(ptr); 
+        
+        Some(())
+    }
+    
+    pub fn shrink(&mut self, alloc: &mut impl ExtendAlloc) -> Option<()> {
+        let mut ptr = self;
+        
+        while let Some(mut next) = ptr.next {
+            let next = unsafe { next.as_mut() };
+            
+            if next.is_empty() {
+                unsafe { next.release_all() }?;
+                
+                let next_next = next.next;
+                ptr.next = next_next;
+                alloc.free(next.into())?;
+            } else {
+                ptr = next;
+            }
+            
+        }
+        
+        Some(())
+    }
+    
+}
+
+pub trait ExtendAlloc {
+    fn alloc(&mut self, extend: OsPool) -> Option<NonNull<OsPool>>;
+    fn free(&mut self, ptr: NonNull<OsPool>) -> Option<()>;
+}
+
+#[repr(C)]
+pub struct PageGroup {
+    header: GroupHeader,
+    first: FirstPage,
+    pages: [Page; GROUP_SIZE-1],
+    
+}
+
+const HEADER_SIZE: usize = size_of::<GroupHeader>();
+
+pub struct GroupHeader {
+    free: Bitmap<GROUP_BITMAP_SIZE>,
+    allocated: Bitmap<GROUP_BITMAP_SIZE>,
+}
+
+pub struct Page {
+    pub data: [u8; PAGE_SIZE]
+}
+
+pub struct FirstPage {
+    pub data: [u8; PAGE_SIZE-HEADER_SIZE]
+}
+
+
+const _ASSERTIONS: () = const {
+    assert!(size_of::<Page>() == PAGE_SIZE);
+    assert!(size_of::<FirstPage>() + size_of::<GroupHeader>() == size_of::<Page>());
+    assert!(size_of::<PageGroup>() == POOL_SIZE / NUM_GROUPS);
+    assert!(size_of::<Memory>() == POOL_SIZE);
+};

@@ -7,6 +7,18 @@ impl<const SIZE: usize> Bitmap<SIZE> {
     pub const fn new() -> Self {
         Self { inner: [0; SIZE] }
     }
+    
+    pub const fn with_inner(inner: [u64; SIZE]) -> Self {
+        Self { inner }
+    }
+    
+    pub const fn all() -> Self {
+        Self { inner: [u64::MAX; SIZE] }
+    }
+    
+    pub fn set_all(&mut self) {
+        self.inner = [u64::MAX; SIZE];
+    }
 
     pub fn get(&self, bit: usize) -> bool {
         let index = bit / 64;
@@ -40,5 +52,11 @@ impl<const SIZE: usize> Bitmap<SIZE> {
             }
         }
         SIZE * 64
+    }
+    
+    pub fn set_bits(&mut self, start: usize, count: usize, val: bool) {
+        for i in 0..count {
+            self.set(start + i, val);
+        }
     }
 }

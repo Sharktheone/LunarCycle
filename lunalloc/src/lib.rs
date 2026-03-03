@@ -5,4 +5,5 @@ extern crate alloc;
 #[cfg(any(windows, unix))]
 pub mod os;
 mod page_size;
+mod ospool;
 mod bitmap;
