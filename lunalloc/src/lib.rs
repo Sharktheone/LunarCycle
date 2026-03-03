@@ -7,3 +7,4 @@ pub mod os;
 mod page_size;
 mod ospool;
 mod bitmap;
+mod arena;
