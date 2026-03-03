@@ -1,15 +1,19 @@
-use core::{num::{NonZero, NonZeroUsize}, ptr::NonNull};
+use core::{num::NonZeroUsize, ptr::NonNull};
+
+use libc::SEM_FAILED;
 
 use crate::{bitmap::Bitmap, os};
 
 const POOL_SIZE: usize = 4 * 1024usize.pow(3);
-const PAGE_SIZE: usize = 16384;
+pub const PAGE_SIZE: usize = 16384;
 const NUM_PAGES: usize = POOL_SIZE / PAGE_SIZE;
 const NUM_GROUPS: usize = 512;
 const GROUP_SIZE: usize = NUM_PAGES / NUM_GROUPS;
 
 const GROUPS_BITMAP_SIZE: usize = NUM_GROUPS.div_ceil(64);
 const GROUP_BITMAP_SIZE: usize = GROUP_SIZE.div_ceil(64);
+
+const DEFAULT_COMMIT_PAGES: usize = 16;
 
 type Memory = [PageGroup; NUM_GROUPS];
 
@@ -71,6 +75,58 @@ impl OsPool {
         Some(unsafe { page_ptr.add(page.get()) })
     }
     
+    pub fn get_next_free_group(&mut self) -> Option<(NonNull<PageGroup>, usize)> {
+        let group = self.free.first_zero();
+        if group >= NUM_GROUPS {
+            // core::hint::cold_path();
+            if let Some(mut next) = self.next {
+                return unsafe { next.as_mut().get_next_free_group() };
+            } else {
+                // core::hint::cold_path();
+                return None;
+            }
+        }
+        
+        if !self.allocated.get(group) {
+            // Safety: We've checked that the group is within bounds, and there are no other references to it
+            // also the group is not allocated, so it's safe to commit it.
+            unsafe { 
+                self.commit_group(group, DEFAULT_COMMIT_PAGES)?
+            };
+        }
+        
+        Some((unsafe { self.ptr.cast::<PageGroup>().add(group) }, group))
+    }
+    
+    pub fn get_next_free_page_on_group(&mut self, group_idx: usize) -> Option<NonNull<Page>> {
+        let group_ptr = self.group(group_idx)?;
+        let group = unsafe { group_ptr.as_ref() };
+        
+        let page = group.header.free.first_zero();
+        
+        if page >= GROUP_SIZE {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        if !group.header.allocated.get(page) {
+            // Safety: We've checked that the page is within bounds, and there are no other references to it
+            // also the page is not allocated, so it's safe to commit it.
+            unsafe { 
+                self.commit_page(group_idx, NonZeroUsize::new(page)?)
+            }?;
+        }
+        
+        Some(unsafe { group_ptr.cast::<Page>().add(page) })
+    }
+    
+    pub fn get_next_free_page(&mut self) -> Option<NonNull<Page>> {
+        let (_, group) = self.get_next_free_group()?;
+        
+        self.get_next_free_page_on_group(group)
+    }
+    
+    
     pub unsafe fn commit_group(&mut self, group: usize, pages: usize) -> Option<()> {
         let commit_size = pages.max(1) * PAGE_SIZE;
         
@@ -86,7 +142,11 @@ impl OsPool {
         };
         
         // Safety: the ptr is aligned and non-null, plus there are no other references.
-        unsafe { group_ptr.as_mut() }.header.free.set_all();
+        let pg = unsafe { group_ptr.as_mut() };
+        pg.header.free.set_all();
+        pg.header.allocated.set_bits(0, pages, true);
+        
+        
         
         self.allocated.set(group, true);
         
@@ -225,14 +285,14 @@ impl OsPool {
         Some(())
     }
     
-    pub fn extend(&mut self, alloc: &mut impl ExtendAlloc) -> Option<()> {
+    pub fn extend(&mut self, alloc: &mut impl ExtendAlloc) -> Option<NonNull<Self>> {
         let last = self.last_pool();
         let new_pool = Self::new()?;
         
         let ptr = alloc.alloc(new_pool)?;
         last.next = Some(ptr); 
         
-        Some(())
+        Some(ptr)
     }
     
     pub fn shrink(&mut self, alloc: &mut impl ExtendAlloc) -> Option<()> {
