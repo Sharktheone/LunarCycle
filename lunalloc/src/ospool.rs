@@ -1,7 +1,5 @@
 use core::{num::NonZeroUsize, ptr::NonNull};
 
-use libc::SEM_FAILED;
-
 use crate::{bitmap::Bitmap, os};
 
 const POOL_SIZE: usize = 4 * 1024usize.pow(3);
@@ -64,7 +62,11 @@ impl OsPool {
     }
     
     pub fn page(&self, group: usize, page: NonZeroUsize) -> Option<NonNull<Page>> {
-        if page.get() >= GROUP_SIZE {
+        Some(self.page_stripped(group, page.get())?.cast::<Page>())
+    }
+    
+    pub fn page_stripped(&self, group: usize, page: usize) -> Option<NonNull<u8>> {
+        if page >= GROUP_SIZE {
             // core::hint::cold_path();
             return None;
         }
@@ -72,7 +74,7 @@ impl OsPool {
         let page_ptr = self.group(group)?.cast::<Page>();
         
         
-        Some(unsafe { page_ptr.add(page.get()) })
+        Some(unsafe { page_ptr.add(page).cast::<u8>() })
     }
     
     pub fn get_next_free_group(&mut self) -> Option<(NonNull<PageGroup>, usize)> {
@@ -98,7 +100,7 @@ impl OsPool {
         Some((unsafe { self.ptr.cast::<PageGroup>().add(group) }, group))
     }
     
-    pub fn get_next_free_page_on_group(&mut self, group_idx: usize) -> Option<NonNull<Page>> {
+    pub fn get_next_free_page_on_group(&mut self, group_idx: usize) -> Option<(NonNull<u8>, usize)> {
         let group_ptr = self.group(group_idx)?;
         let group = unsafe { group_ptr.as_ref() };
         
@@ -117,15 +119,67 @@ impl OsPool {
             }?;
         }
         
-        Some(unsafe { group_ptr.cast::<Page>().add(page) })
+        Some((unsafe { group_ptr.cast::<Page>().add(page).cast::<u8>() }, page))
     }
     
-    pub fn get_next_free_page(&mut self) -> Option<NonNull<Page>> {
+    pub fn get_next_free_page(&mut self) -> Option<((NonNull<u8>, usize), usize)> {
         let (_, group) = self.get_next_free_group()?;
         
-        self.get_next_free_page_on_group(group)
+        Some((self.get_next_free_page_on_group(group)?, group))
     }
     
+    pub fn get_page_and_slot(&self, ptr: NonNull<u8>, nslots: usize) -> Option<(usize, usize, usize)> {
+        let base_ptr = self.ptr.cast::<u8>();
+        let offset = ptr.as_ptr() as usize - base_ptr.as_ptr() as usize;
+        
+        if offset >= POOL_SIZE {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        //TODO: check the maths is correct here
+        let group = offset / (GROUP_SIZE * PAGE_SIZE);
+        let page_offset = offset % (GROUP_SIZE * PAGE_SIZE);
+        let page = page_offset / PAGE_SIZE;
+        let slot = page_offset % PAGE_SIZE / (PAGE_SIZE / nslots); // Assuming 64 slots per page
+        
+        Some((group, page, slot))
+    }
+    
+    pub unsafe fn mark_page_full(&mut self, group_idx: usize, page: usize) -> Option<()> {
+        let mut group_ptr = self.group(group_idx)?;
+        // Safety: the ptr is aligned and non-null, plus there are no other references.
+        let group = unsafe { group_ptr.as_mut() };
+        
+        if page >= GROUP_SIZE {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        group.header.free.set(page, false);
+        
+        if group.header.free.all_clear() {
+            self.free.set(group_idx, false);
+        }
+        
+        Some(())
+    }
+   
+   pub unsafe fn mark_page_not_full(&mut self, group_idx: usize, page: usize) -> Option<()> {
+        let mut group_ptr = self.group(group_idx)?;
+        // Safety: the ptr is aligned and non-null, plus there are no other references.
+        let group = unsafe { group_ptr.as_mut() };
+        
+        if page >= GROUP_SIZE {
+            // core::hint::cold_path();
+            return None;
+        }
+        
+        group.header.free.set(page, true);
+        self.free.set(group_idx, true);
+        
+        Some(())
+    } 
     
     pub unsafe fn commit_group(&mut self, group: usize, pages: usize) -> Option<()> {
         let commit_size = pages.max(1) * PAGE_SIZE;
