@@ -27,11 +27,11 @@ impl PageAllocator {
     /// Allocates a page of memory and returns a pointer to it.
     /// The memory is zero-initialized.
     pub fn alloc_page(&self) -> Option<*mut u8> {
-        crate::map::map(self.page_size)
+        crate::os::map(self.page_size)
     }
 
     pub fn alloc_multi_page(&self, num_pages: usize) -> Option<*mut u8> {
-        crate::map::map(self.page_size * num_pages)
+        crate::os::map(self.page_size * num_pages)
     }
 
     pub fn alloc_n_pages(&self, ptrs: &mut [*mut u8]) -> Option<()> {
@@ -48,6 +48,8 @@ impl PageAllocator {
     }
 
     pub fn alloc_multi_n_pages(&self, ptrs: &mut [*mut u8], num_pages: usize) -> usize {
+
+
         let mut allocated = 0;
         for ptr in ptrs.iter_mut() {
             if let Some(p) = self.alloc_multi_page(num_pages) {
@@ -81,7 +83,7 @@ impl PageAllocator {
     /// - The caller must ensure that the pointer is not used after this call.
     pub unsafe fn dealloc_page(&self, ptr: *mut u8) -> bool {
         unsafe {
-            crate::map::unmap(ptr, self.page_size)
+            crate::os::unmap(ptr, self.page_size)
         }
     }
 }
