@@ -1,7 +1,5 @@
 use core::ptr::NonNull;
 
-use libc::F_FREEZE_FS;
-
 use crate::{bitmap::{Bitmap, BitmapRef}, ospool::{OsPool, PAGE_SIZE}};
 
 
