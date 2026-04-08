@@ -18,9 +18,9 @@ type Memory = [PageGroup; NUM_GROUPS];
 
 pub struct OsPool {
     ptr: NonNull<Memory>,
-    
+
     free: Bitmap<GROUPS_BITMAP_SIZE>,
-    allocated: Bitmap<GROUPS_BITMAP_SIZE>,
+    committed: Bitmap<GROUPS_BITMAP_SIZE>,
     
     next: Option<NonNull<Self>>
 }
@@ -34,7 +34,7 @@ impl OsPool {
         Some(Self {
             ptr: ptr.cast(),
             free: Bitmap::all(),
-            allocated: Bitmap::new(),
+            committed: Bitmap::new(),
             next: None,
         })
     }
@@ -44,7 +44,7 @@ impl OsPool {
     }
     
     pub fn has_allocated(&self) -> bool {
-        self.allocated.first_zero() >= NUM_GROUPS
+        self.committed.first_zero() >= NUM_GROUPS
     }
     
     pub fn group(&self, group: usize) -> Option<NonNull<PageGroup>> {
@@ -89,7 +89,7 @@ impl OsPool {
             }
         }
         
-        if !self.allocated.get(group) {
+        if !self.committed.get(group) {
             // Safety: We've checked that the group is within bounds, and there are no other references to it
             // also the group is not allocated, so it's safe to commit it.
             unsafe { 
@@ -202,7 +202,7 @@ impl OsPool {
         
         
         
-        self.allocated.set(group, true);
+        self.committed.set(group, true);
         
         if !success {
             // core::hint::cold_path();
@@ -225,7 +225,7 @@ impl OsPool {
             return None;
         }
         
-        self.allocated.set(group, false);
+        self.committed.set(group, false);
         
         
         Some(())
