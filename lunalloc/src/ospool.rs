@@ -7,6 +7,7 @@ pub const PAGE_SIZE: usize = 16384;
 const NUM_PAGES: usize = POOL_SIZE / PAGE_SIZE;
 const NUM_GROUPS: usize = 512;
 const GROUP_SIZE: usize = NUM_PAGES / NUM_GROUPS;
+const GROUP_BYTES: usize = POOL_SIZE / NUM_GROUPS;
 
 const GROUPS_BITMAP_SIZE: usize = NUM_GROUPS.div_ceil(64);
 const GROUP_BITMAP_SIZE: usize = GROUP_SIZE.div_ceil(64);
@@ -19,7 +20,9 @@ type Memory = [PageGroup; NUM_GROUPS];
 pub struct OsPool {
     ptr: NonNull<Memory>,
 
+    // pages which still have at least one free slot
     free: Bitmap<GROUPS_BITMAP_SIZE>,
+    // pages where we have committed at least the header
     committed: Bitmap<GROUPS_BITMAP_SIZE>,
     
     next: Option<NonNull<Self>>
@@ -78,14 +81,14 @@ impl OsPool {
     }
     
     pub fn get_next_free_group(&mut self) -> Option<(NonNull<PageGroup>, usize)> {
-        let group = self.free.first_zero();
+        let group = self.free.first_one();
         if group >= NUM_GROUPS {
             // core::hint::cold_path();
-            if let Some(mut next) = self.next {
-                return unsafe { next.as_mut().get_next_free_group() };
+            return if let Some(mut next) = self.next {
+                unsafe { next.as_mut().get_next_free_group() }
             } else {
                 // core::hint::cold_path();
-                return None;
+                None
             }
         }
         
@@ -99,12 +102,13 @@ impl OsPool {
         
         Some((unsafe { self.ptr.cast::<PageGroup>().add(group) }, group))
     }
-    
-    pub fn get_next_free_page_on_group(&mut self, group_idx: usize) -> Option<(NonNull<u8>, usize)> {
+
+    // Safety: The caller must ensure that the group_idx has committed its header.
+    pub unsafe fn get_next_free_page_on_group(&mut self, group_idx: usize) -> Option<(NonNull<u8>, usize)> {
         let group_ptr = self.group(group_idx)?;
         let group = unsafe { group_ptr.as_ref() };
         
-        let page = group.header.free.first_zero();
+        let page = group.header.free.first_one();
         
         if page >= GROUP_SIZE {
             // core::hint::cold_path();
@@ -118,6 +122,10 @@ impl OsPool {
                 self.commit_page(group_idx, NonZeroUsize::new(page)?)
             }?;
         }
+
+        if page == 0 {
+            todo!("handle the first page header size difference");
+        }
         
         Some((unsafe { group_ptr.cast::<Page>().add(page).cast::<u8>() }, page))
     }
@@ -125,23 +133,33 @@ impl OsPool {
     pub fn get_next_free_page(&mut self) -> Option<((NonNull<u8>, usize), usize)> {
         let (_, group) = self.get_next_free_group()?;
         
-        Some((self.get_next_free_page_on_group(group)?, group))
+        unsafe {
+            // Safety: get_next_free_group commits the group if it wasn't already, so the header is guaranteed to be committed.
+            Some((self.get_next_free_page_on_group(group)?, group))
+        }
     }
-    
+
     pub fn get_page_and_slot(&self, ptr: NonNull<u8>, nslots: usize) -> Option<(usize, usize, usize)> {
         let base_ptr = self.ptr.cast::<u8>();
-        let offset = ptr.as_ptr() as usize - base_ptr.as_ptr() as usize;
+        let offset = ptr.as_ptr() as isize - base_ptr.as_ptr() as isize;
         
-        if offset >= POOL_SIZE {
-            // core::hint::cold_path();
-            return None;
+        if offset.is_negative() ||  offset as usize >= POOL_SIZE {
+            // we could still be in the next pool, but we don't have a reference to it, so we can't check.
+            if let Some(next) = self.next {
+                return unsafe { next.as_ref().get_page_and_slot(ptr, nslots) };
+            } else {
+                // core::hint::cold_path();
+                return None;
+            }
         }
+
+        let offset = offset as usize;
         
         //TODO: check the maths is correct here
-        let group = offset / (GROUP_SIZE * PAGE_SIZE);
-        let page_offset = offset % (GROUP_SIZE * PAGE_SIZE);
+        let group = offset / GROUP_BYTES;
+        let page_offset = offset % GROUP_BYTES;
         let page = page_offset / PAGE_SIZE;
-        let slot = page_offset % PAGE_SIZE / (PAGE_SIZE / nslots); // Assuming 64 slots per page
+        let slot = (page_offset % PAGE_SIZE) / (PAGE_SIZE / nslots);
         
         Some((group, page, slot))
     }
@@ -164,8 +182,8 @@ impl OsPool {
         
         Some(())
     }
-   
-   pub unsafe fn mark_page_not_full(&mut self, group_idx: usize, page: usize) -> Option<()> {
+
+    pub unsafe fn mark_page_not_full(&mut self, group_idx: usize, page: usize) -> Option<()> {
         let mut group_ptr = self.group(group_idx)?;
         // Safety: the ptr is aligned and non-null, plus there are no other references.
         let group = unsafe { group_ptr.as_mut() };
