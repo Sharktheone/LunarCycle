@@ -1,9 +1,8 @@
+use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 
 use crate::{bitmap::{Bitmap, BitmapRef}, ospool::{OsPool, PAGE_SIZE}};
-
-
-
+use crate::ospool::{FirstPage, Page, PageCommitCB};
 
 pub struct ArenaAlloc<const SIZE: usize> {
     pool: OsPool,
@@ -21,35 +20,48 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
     const FIRST_PAGE_HEADER_BYTES: usize = 128;
     const FIRST_PAGE_ELEMS: usize = (PAGE_SIZE-(Self::FIRST_PAGE_HEADER_BYTES+Self::HEADER_BYTES)) / SIZE;
     const FIRST_PAGE_ELEMS_LESS: usize = Self::ELEMS_PER_PAGE-Self::FIRST_PAGE_ELEMS;
-    
+
     
     
     fn new() -> Option<Self> {
         Some(Self { pool: OsPool::new()? })
     }
     
-    const fn header_ptr(&mut self, page: NonNull<u8>, page_idx: usize) -> NonNull<u8> {
+    const fn header_ptr(page: NonNull<u8>, page_idx: usize) -> NonNull<u8> {
         unsafe {
             page.cast::<u8>()
             .add((page_idx == 0) as usize * Self::FIRST_PAGE_HEADER_BYTES)
         }
     }
-    
+
+    const fn first_page_header_ptr(page: NonNull<u8>) -> NonNull<u8> {
+        unsafe {
+            page.cast::<u8>()
+            .add(Self::FIRST_PAGE_HEADER_BYTES)
+        }
+    }
+
     const fn page_elements(page_idx: usize) -> usize {
+        // non-branching way to return either FIRST_PAGE_ELEMS or ELEMS_PER_PAGE
         Self::ELEMS_PER_PAGE - (page_idx == 0) as usize * Self::FIRST_PAGE_ELEMS_LESS
     }
     
-    const unsafe fn bitmap_ref<const OFFSET: usize>(&mut self, page: NonNull<u8>, page_idx: usize) -> BitmapRef<'_> {
-        let header = self.header_ptr(page, page_idx);
-        
+    const unsafe fn bitmap_ref<const OFFSET: usize>(&mut self, page: NonNull<u8>, page_idx: usize) -> BitmapRef {
+        let header = Self::header_ptr(page, page_idx);
+
+        unsafe { Self::bitmap_ref_header::<OFFSET>(header) }
+    }
+
+    const unsafe fn bitmap_ref_header<'a, const OFFSET: usize>(header: NonNull<u8>) -> BitmapRef<'a> {
         let slice = unsafe {
             core::slice::from_raw_parts_mut(
                 header.as_ptr().add(OFFSET*Self::BITMAP_BYTES) as *mut u64,
                 Self::BITMAP_SIZE
             )
         };
-        
+
         BitmapRef::new(slice)
+
     }
     
     const unsafe fn free_bitmap(&mut self, page: NonNull<u8>, page_idx: usize) -> BitmapRef<'_> {
@@ -77,7 +89,7 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
     }
     
     fn alloc(&mut self) -> Option<NonNull<u8>> {
-        let ((page, page_idx), group) = self.pool.get_next_free_page()?;
+        let ((page, page_idx), group) = self.pool.get_next_free_page::<PageCommitter<SIZE>>()?;
         
         let mut free_bitmap = unsafe { self.free_bitmap(page, page_idx) };
         
@@ -115,6 +127,40 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
     
 }
 
+
+struct PageCommitter<const SIZE: usize>;
+
+impl<const SIZE: usize> PageCommitCB for PageCommitter<SIZE> {
+    fn commit_page(page: NonNull<Page>) -> Option<()> {
+        let mut free_bitmap = unsafe { ArenaAlloc::<SIZE>::bitmap_ref_header::<0>(page.cast()) };
+
+        let num_elements = ArenaAlloc::<SIZE>::page_elements(0);
+
+        free_bitmap.set_bits(0, num_elements, true);
+
+        Some(())
+    }
+
+    fn commit_pages(page: NonNull<Page>, count: NonZeroUsize) -> Option<()> {
+        for i in 0..count.get() {
+            let page = unsafe { page.add(i) };
+            Self::commit_page(page)?;
+        }
+
+        Some(())
+    }
+
+    fn commit_first_page(page: NonNull<FirstPage>) -> Option<()> {
+        let header = ArenaAlloc::<SIZE>::first_page_header_ptr(page.cast());
+        let mut free_bitmap = unsafe { ArenaAlloc::<SIZE>::bitmap_ref_header::<0>(header) };
+
+        let num_elements = ArenaAlloc::<SIZE>::FIRST_PAGE_ELEMS;
+
+        free_bitmap.set_bits(0, num_elements, true);
+
+        Some(())
+    }
+}
 
 #[repr(C)]
 struct PageHeader<const SIZE: usize> {
