@@ -80,12 +80,12 @@ impl OsPool {
         Some(unsafe { page_ptr.add(page).cast::<u8>() })
     }
     
-    pub fn get_next_free_group(&mut self) -> Option<(NonNull<PageGroup>, usize)> {
+    pub fn get_next_free_group<CB: PageCommitCB>(&mut self) -> Option<(NonNull<PageGroup>, usize)> {
         let group = self.free.first_one();
         if group >= NUM_GROUPS {
             // core::hint::cold_path();
             return if let Some(mut next) = self.next {
-                unsafe { next.as_mut().get_next_free_group() }
+                unsafe { next.as_mut().get_next_free_group::<CB>() }
             } else {
                 // core::hint::cold_path();
                 None
@@ -96,7 +96,7 @@ impl OsPool {
             // Safety: We've checked that the group is within bounds, and there are no other references to it
             // also the group is not allocated, so it's safe to commit it.
             unsafe { 
-                self.commit_group(group, DEFAULT_COMMIT_PAGES)?
+                self.commit_group::<CB>(group, DEFAULT_COMMIT_PAGES)?
             };
         }
         
@@ -104,7 +104,7 @@ impl OsPool {
     }
 
     // Safety: The caller must ensure that the group_idx has committed its header.
-    pub unsafe fn get_next_free_page_on_group(&mut self, group_idx: usize) -> Option<(NonNull<u8>, usize)> {
+    pub unsafe fn get_next_free_page_on_group<CB: PageCommitCB>(&mut self, group_idx: usize) -> Option<(NonNull<u8>, usize)> {
         let group_ptr = self.group(group_idx)?;
         let group = unsafe { group_ptr.as_ref() };
         
@@ -119,7 +119,7 @@ impl OsPool {
             // Safety: We've checked that the page is within bounds, and there are no other references to it
             // also the page is not allocated, so it's safe to commit it.
             unsafe { 
-                self.commit_page(group_idx, NonZeroUsize::new(page)?)
+                self.commit_page::<CB>(group_idx, NonZeroUsize::new(page)?)
             }?;
         }
 
@@ -130,12 +130,12 @@ impl OsPool {
         Some((unsafe { group_ptr.cast::<Page>().add(page).cast::<u8>() }, page))
     }
     
-    pub fn get_next_free_page(&mut self) -> Option<((NonNull<u8>, usize), usize)> {
-        let (_, group) = self.get_next_free_group()?;
+    pub fn get_next_free_page<CB: PageCommitCB>(&mut self) -> Option<((NonNull<u8>, usize), usize)> {
+        let (_, group) = self.get_next_free_group::<CB>()?;
         
         unsafe {
             // Safety: get_next_free_group commits the group if it wasn't already, so the header is guaranteed to be committed.
-            Some((self.get_next_free_page_on_group(group)?, group))
+            Some((self.get_next_free_page_on_group::<CB>(group)?, group))
         }
     }
 
@@ -199,13 +199,11 @@ impl OsPool {
         Some(())
     } 
     
-    pub unsafe fn commit_group(&mut self, group: usize, pages: usize) -> Option<()> {
+    pub unsafe fn commit_group<CB: PageCommitCB>(&mut self, group: usize, pages: usize) -> Option<()> {
         let commit_size = pages.max(1) * PAGE_SIZE;
         
         let mut group_ptr = self.group(group)?;
-        
-        
-        
+
         let success = unsafe { 
             // Safety: commit_size is guaranteed to be non-zero
             let commit_size = NonZeroUsize::new_unchecked(commit_size);
@@ -217,9 +215,12 @@ impl OsPool {
         let pg = unsafe { group_ptr.as_mut() };
         pg.header.free.set_all();
         pg.header.allocated.set_bits(0, pages, true);
-        
-        
-        
+
+        CB::commit_first_page(unsafe { NonNull::new_unchecked(&mut pg.first) });
+        if let Some(pages) = NonZeroUsize::new(pages-1) {
+            CB::commit_pages(unsafe { NonNull::new_unchecked(&mut pg.pages[0]) }, pages);
+        }
+
         self.committed.set(group, true);
         
         if !success {
@@ -250,7 +251,7 @@ impl OsPool {
     }
     
     
-    pub unsafe fn commit_page(&mut self, group: usize, page: NonZeroUsize) -> Option<()> {
+    pub unsafe fn commit_page<CB: PageCommitCB>(&mut self, group: usize, page: NonZeroUsize) -> Option<()> {
         let mut group_ptr = self.group(group)?;
         let page_ptr = self.page(group, page)?;
         
@@ -267,12 +268,16 @@ impl OsPool {
         let header = unsafe { &mut group_ptr.as_mut().header };
         header.free.set(page.get(), true);
         header.allocated.set(page.get(), true);
+
+        CB::commit_page(page_ptr);
+
+
         
         
         Some(())
     }
     
-    pub unsafe fn commit_pages(&mut self, group: usize, page: NonZeroUsize, count: NonZeroUsize) -> Option<()> {
+    pub unsafe fn commit_pages<CB: PageCommitCB>(&mut self, group: usize, page: NonZeroUsize, count: NonZeroUsize) -> Option<()> {
         let mut group_ptr = self.group(group)?;
         let page_ptr = self.page(group, page)?;
         
@@ -289,7 +294,9 @@ impl OsPool {
         let header = unsafe { &mut group_ptr.as_mut().header };
         header.free.set_bits(page.get(), count.get(), true);
         header.allocated.set_bits(page.get(), count.get(), true);
-        
+
+        CB::commit_pages(page_ptr, count);
+
         Some(())
     }
     
@@ -393,6 +400,12 @@ impl OsPool {
 pub trait ExtendAlloc {
     fn alloc(&mut self, extend: OsPool) -> Option<NonNull<OsPool>>;
     fn free(&mut self, ptr: NonNull<OsPool>) -> Option<()>;
+}
+
+pub trait PageCommitCB {
+    fn commit_page(page: NonNull<Page>) -> Option<()>;
+    fn commit_pages(page: NonNull<Page>, count: NonZeroUsize) -> Option<()>;
+    fn commit_first_page(page: NonNull<FirstPage>) -> Option<()>;
 }
 
 #[repr(C)]
