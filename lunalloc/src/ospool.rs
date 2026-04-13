@@ -1,4 +1,4 @@
-use core::{array, num::NonZeroUsize, ptr::NonNull};
+use core::{array, mem::size_of, num::NonZeroUsize, ptr::NonNull};
 
 use crate::{bitmap::Bitmap, os};
 
