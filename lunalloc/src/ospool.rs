@@ -275,9 +275,9 @@ impl OsPool {
         pg.header.free.set_all();
         pg.header.allocated.set_bits(0, pages, true);
 
-        CB::commit_first_page(unsafe { NonNull::new_unchecked(&mut pg.first) });
+        CB::commit_first_page(unsafe { NonNull::new_unchecked(&mut pg.first) })?;
         if let Some(pages) = NonZeroUsize::new(pages - 1) {
-            CB::commit_pages(unsafe { NonNull::new_unchecked(&mut pg.pages[0]) }, pages);
+            CB::commit_pages(unsafe { NonNull::new_unchecked(&mut pg.pages[0]) }, pages)?;
         }
 
         self.committed.set(group, true);
@@ -335,7 +335,7 @@ impl OsPool {
         header.free.set(page.get(), true);
         header.allocated.set(page.get(), true);
 
-        CB::commit_page(page_ptr);
+        CB::commit_page(page_ptr)?;
 
         Some(())
     }
@@ -369,7 +369,7 @@ impl OsPool {
         header.free.set_bits(page.get(), count.get(), true);
         header.allocated.set_bits(page.get(), count.get(), true);
 
-        CB::commit_pages(page_ptr, count);
+        CB::commit_pages(page_ptr, count)?;
 
         Some(())
     }
