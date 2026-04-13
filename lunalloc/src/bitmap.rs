@@ -68,6 +68,10 @@ impl<const SIZE: usize> Bitmap<SIZE> {
     pub fn all_clear(&self) -> bool {
         self.inner.iter().all(|&block| block == 0)
     }
+
+    pub fn has_set(&self) -> bool {
+        self.inner.iter().any(|&block| block != 0)
+    }
 }
 
 pub struct BitmapRef<'a> {
