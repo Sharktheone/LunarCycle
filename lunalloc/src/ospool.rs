@@ -1,4 +1,4 @@
-use core::{num::NonZeroUsize, ptr::NonNull};
+use core::{array, num::NonZeroUsize, ptr::NonNull};
 
 use crate::{bitmap::Bitmap, os};
 
@@ -41,7 +41,30 @@ impl OsPool {
             next: None,
         })
     }
-    
+
+    pub fn from_reserved(ptr: NonNull<u8>) -> Self {
+        Self {
+            ptr: ptr.cast(),
+            free: Bitmap::all(),
+            committed: Bitmap::new(),
+            next: None,
+        }
+    }
+
+    pub fn new_multiple<const N: usize>() -> Option<[Self; N]> {
+        let size = NonZeroUsize::new(POOL_SIZE * N)?;
+
+        let ptr = unsafe { os::reserve(size) }?;
+        let ptr = ptr.cast::<Memory>();
+
+        Some(array::from_fn(|i| Self {
+            ptr: unsafe { ptr.add(i) },
+            free: Bitmap::all(),
+            committed: Bitmap::new(),
+            next: None,
+        }))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.free.first_zero() >= NUM_GROUPS
     }
