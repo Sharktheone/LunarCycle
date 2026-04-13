@@ -1,13 +1,10 @@
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 
-#[cfg(windows)]
-mod windows;
 #[cfg(unix)]
 mod posix;
-
-
-
+#[cfg(windows)]
+mod windows;
 
 pub(crate) unsafe fn reserve(size: NonZeroUsize) -> Option<NonNull<u8>> {
     #[cfg(windows)]
