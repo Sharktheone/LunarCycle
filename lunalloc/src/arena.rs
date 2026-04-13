@@ -23,8 +23,16 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
 
     
     
-    fn new() -> Option<Self> {
+    pub fn new() -> Option<Self> {
         Some(Self { pool: OsPool::new()? })
+    }
+
+    pub const fn from_pool(pool: OsPool) -> Self {
+        Self { pool }
+    }
+
+    pub fn new_multiple<const N: usize>() -> Option<[Self; N]> {
+        Some(OsPool::new_multiple::<N>()?.map(Self::from_pool))
     }
     
     const fn header_ptr(page: NonNull<u8>, page_idx: usize) -> NonNull<u8> {
