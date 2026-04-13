@@ -272,6 +272,10 @@ impl OsPool {
             os::commit(group_ptr.cast(), commit_size)
         };
 
+        if !success {
+            // core::hint::cold_path();
+            return None;
+        }
         // Safety: the ptr is aligned and non-null, plus there are no other references.
         let pg = unsafe { group_ptr.as_mut() };
         pg.header.free.set_all();
@@ -284,11 +288,7 @@ impl OsPool {
 
         self.committed.set(group, true);
 
-        if !success {
-            // core::hint::cold_path();
-            return None;
-        }
-
+        
         Some(())
     }
 
