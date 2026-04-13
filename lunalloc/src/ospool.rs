@@ -66,6 +66,9 @@ impl OsPool {
 
     pub fn is_empty(&self) -> bool {
         self.free.first_zero() >= NUM_GROUPS
+            && self
+                .next
+                .is_none_or(|next| unsafe { next.as_ref().is_empty() })
     }
 
     pub fn has_allocated(&self) -> bool {
