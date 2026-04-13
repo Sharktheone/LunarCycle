@@ -72,7 +72,10 @@ impl OsPool {
     }
 
     pub fn has_allocated(&self) -> bool {
-        self.committed.first_zero() >= NUM_GROUPS
+        self.committed.has_set()
+            || self
+                .next
+                .is_some_and(|next| unsafe { next.as_ref().has_allocated() })
     }
 
     pub fn group(&self, group: usize) -> Option<NonNull<PageGroup>> {
