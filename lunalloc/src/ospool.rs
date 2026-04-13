@@ -112,7 +112,8 @@ impl OsPool {
         if group >= NUM_GROUPS {
             // core::hint::cold_path();
             return if let Some(mut next) = self.next {
-                unsafe { next.as_mut().get_next_free_group::<CB>() }
+                let (group_ptr, group_idx) = unsafe { next.as_mut().get_next_free_group::<CB>() }?;
+                Some((group_ptr, group_idx + NUM_GROUPS))
             } else {
                 // core::hint::cold_path();
                 None
@@ -187,7 +188,8 @@ impl OsPool {
         if offset.is_negative() || offset as usize >= POOL_SIZE {
             // we could still be in the next pool, but we don't have a reference to it, so we can't check.
             if let Some(next) = self.next {
-                return unsafe { next.as_ref().get_page_and_slot(ptr, nslots) };
+                let (group, page, page_offset) = unsafe { next.as_ref().get_page_offset(ptr, nslots) }?;
+                return Some((group + NUM_GROUPS, page, page_offset));
             } else {
                 // core::hint::cold_path();
                 return None;
