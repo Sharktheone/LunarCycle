@@ -153,11 +153,13 @@ impl OsPool {
         if !group.header.allocated.get(page) {
             // Safety: We've checked that the page is within bounds, and there are no other references to it
             // also the page is not allocated, so it's safe to commit it.
-            unsafe { self.commit_page::<CB>(group_idx, NonZeroUsize::new(page)?) }?;
-        }
 
-        if page == 0 {
-            todo!("handle the first page header size difference");
+            if let Some(page) = NonZeroUsize::new(page) {
+                //TODO: we should think about committing more pages than one, ideally with an adaptive strategy based on the free pages.
+                unsafe { self.commit_page::<CB>(group_idx, page)? };
+            } else {
+                //NOTE: we should be good to go here as the first page should always be committed.
+            }
         }
 
         Some((
@@ -506,7 +508,7 @@ pub struct PageGroup {
     pages: [Page; GROUP_SIZE - 1],
 }
 
-const HEADER_SIZE: usize = size_of::<GroupHeader>();
+pub const HEADER_SIZE: usize = size_of::<GroupHeader>();
 
 pub struct GroupHeader {
     free: Bitmap<GROUP_BITMAP_SIZE>,
