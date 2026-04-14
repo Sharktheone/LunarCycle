@@ -177,18 +177,14 @@ impl OsPool {
         }
     }
 
-    pub fn get_page_and_slot(
-        &self,
-        ptr: NonNull<u8>,
-        nslots: usize,
-    ) -> Option<(usize, usize, usize)> {
+    pub fn get_page_offset(&self, ptr: NonNull<u8>) -> Option<(usize, usize, usize)> {
         let base_ptr = self.ptr.cast::<u8>();
         let offset = ptr.as_ptr() as isize - base_ptr.as_ptr() as isize;
 
         if offset.is_negative() || offset as usize >= POOL_SIZE {
             // we could still be in the next pool, but we don't have a reference to it, so we can't check.
             if let Some(next) = self.next {
-                let (group, page, page_offset) = unsafe { next.as_ref().get_page_offset(ptr, nslots) }?;
+                let (group, page, page_offset) = unsafe { next.as_ref().get_page_offset(ptr) }?;
                 return Some((group + NUM_GROUPS, page, page_offset));
             } else {
                 // core::hint::cold_path();
@@ -202,9 +198,9 @@ impl OsPool {
         let group = offset / GROUP_BYTES;
         let page_offset = offset % GROUP_BYTES;
         let page = page_offset / PAGE_SIZE;
-        let slot = (page_offset % PAGE_SIZE) / (PAGE_SIZE / nslots);
+        let page_offset = page_offset % PAGE_SIZE;
 
-        Some((group, page, slot))
+        Some((group, page, page_offset))
     }
 
     pub unsafe fn mark_page_full(&mut self, group_idx: usize, page: usize) -> Option<()> {
