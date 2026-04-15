@@ -32,12 +32,12 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
         })
     }
 
-    pub const fn from_pool(pool: OsPool) -> Self {
+    pub const unsafe fn from_pool(pool: OsPool) -> Self {
         Self { pool }
     }
 
     pub fn new_multiple<const N: usize>() -> Option<[Self; N]> {
-        Some(OsPool::new_multiple::<N>()?.map(Self::from_pool))
+        Some(OsPool::new_multiple::<N>()?.map(|p| unsafe { Self::from_pool(p) }))
     }
 
 
@@ -68,6 +68,18 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
     const fn page_elements(page_idx: usize) -> usize {
         // non-branching way to return either FIRST_PAGE_ELEMS or ELEMS_PER_PAGE
         Self::ELEMS_PER_PAGE - (page_idx == 0) as usize * Self::FIRST_PAGE_ELEMS_LESS
+    }
+    const fn data_offset(page_idx: usize) -> usize {
+        // non-branching seems to compile to the exact same asm, so:
+        if page_idx == 0 {
+            Self::FIRST_PAGE_DATA_OFFSET
+        } else {
+            Self::PAGE_DATA_OFFSET
+        }
+    }
+
+    const fn data_ptr(page: NonNull<u8>, page_idx: usize) -> NonNull<u8> {
+        unsafe { page.add(Self::data_offset(page_idx)) }
     }
 
     const unsafe fn bitmap_ref<const OFFSET: usize>(
@@ -117,34 +129,59 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
         unsafe { self.bitmap_ref::<3>(page, page_idx) }
     }
 
-    fn alloc(&mut self) -> Option<NonNull<u8>> {
+    pub fn alloc(&mut self) -> Option<NonNull<u8>> {
         let ((page, page_idx), group) = self.pool.get_next_free_page::<PageCommitter<SIZE>>()?;
 
         let mut free_bitmap = unsafe { self.free_bitmap(page, page_idx) };
 
         let slot = free_bitmap.first_one();
+
+        #[cfg(debug_assertions)]
+        if slot >= Self::page_elements(page_idx) {
+            panic!("Pool gave us a page with no free slots");
+        }
+
         free_bitmap.set(slot, false);
 
-        if slot == Self::page_elements(page_idx) - 1 {
+        if free_bitmap.first_one() >= Self::page_elements(page_idx)  {
             // This page is now full, mark it as such in the pool
             unsafe {
                 self.pool.mark_page_full(group, page_idx);
             }
         }
 
-        Some(unsafe { page.cast::<u8>().add(slot * SIZE) })
+        Some(unsafe { Self::data_ptr(page, page_idx).add(slot * SIZE) })
     }
 
-    fn free(&mut self, ptr: NonNull<u8>) -> Option<()> {
-        //TODO: this is WRONG, we need a different way to calculate the correct slot as the first page has a different layout
-        let (group_idx, page_idx, slot) = self.pool.get_page_and_slot(ptr, Self::ELEMS_PER_PAGE)?;
+    pub fn free(&mut self, ptr: NonNull<u8>) -> Option<()> {
+        let (group_idx, page_idx, page_offset) = self.pool.get_page_offset(ptr)?;
+        let data_offset = Self::data_offset(page_idx);
+        let page_elements = Self::page_elements(page_idx);
 
+        if page_offset < data_offset {
+            return None; // we could say that this is an invalid input and just not check for it and make it the callers fault!
+        }
+
+        let slot_offset = page_offset - data_offset;
+        if slot_offset % SIZE != 0 {
+            return None; // we could say that this is an invalid input and just not check for it and make it the callers fault!
+        }
+
+        let slot = slot_offset / SIZE;
+        if slot >= page_elements {
+            return None; // we could say that this is an invalid input and just not check for it and make it the callers fault!
+        }
         let page = self.pool.page_stripped(group_idx, page_idx)?;
 
         let mut free_bitmap = unsafe { self.free_bitmap(page, page_idx) };
+
+        if free_bitmap.get(slot) {
+            return None; // This slot is already free, so this is either a double free or an invalid pointer
+        }
+
         free_bitmap.set(slot, true);
 
-        if free_bitmap.first_one() < Self::page_elements(page_idx) {
+        if free_bitmap.first_one() < page_elements {
             // This page is no longer full, mark it as such in the pool
             unsafe {
                 self.pool.mark_page_not_full(group_idx, page_idx);
@@ -161,7 +198,7 @@ impl<const SIZE: usize> PageCommitCB for PageCommitter<SIZE> {
     fn commit_page(page: NonNull<Page>) -> Option<()> {
         let mut free_bitmap = unsafe { ArenaAlloc::<SIZE>::bitmap_ref_header::<0>(page.cast()) };
 
-        let num_elements = ArenaAlloc::<SIZE>::page_elements(0);
+        let num_elements = ArenaAlloc::<SIZE>::ELEMS_PER_PAGE;
 
         free_bitmap.set_bits(0, num_elements, true);
 
