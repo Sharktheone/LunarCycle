@@ -4,7 +4,7 @@ use core::ptr::NonNull;
 use crate::ospool::{FirstPage, Page, PageCommitCB};
 use crate::{
     bitmap::{Bitmap, BitmapRef},
-    ospool::{OsPool, PAGE_SIZE},
+    ospool::{OsPool, HEADER_SIZE, PAGE_SIZE},
 };
 
 pub struct ArenaAlloc<const SIZE: usize> {
@@ -17,12 +17,13 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
     const BITMAP_SIZE: usize = Self::_ELEMS_PER_PAGE_NAIVE.div_ceil(64);
     const BITMAP_BYTES: usize = Self::BITMAP_SIZE * 8;
     const HEADER_BYTES: usize = Self::BITMAP_BYTES * 4;
+    const PAGE_DATA_OFFSET: usize = Self::align_up(Self::HEADER_BYTES, SIZE);
+    const ELEMS_PER_PAGE: usize = (PAGE_SIZE - Self::PAGE_DATA_OFFSET) / SIZE;
 
-    const ELEMS_PER_PAGE: usize = (PAGE_SIZE - Self::HEADER_BYTES) / SIZE;
-
-    const FIRST_PAGE_HEADER_BYTES: usize = 128;
-    const FIRST_PAGE_ELEMS: usize =
-        (PAGE_SIZE - (Self::FIRST_PAGE_HEADER_BYTES + Self::HEADER_BYTES)) / SIZE;
+    const FIRST_PAGE_HEADER_BYTES: usize = HEADER_SIZE;
+    const FIRST_PAGE_DATA_OFFSET: usize =
+        Self::align_up (Self::FIRST_PAGE_HEADER_BYTES + Self::HEADER_BYTES, SIZE);
+    const FIRST_PAGE_ELEMS: usize = (PAGE_SIZE - Self::FIRST_PAGE_DATA_OFFSET) / SIZE;
     const FIRST_PAGE_ELEMS_LESS: usize = Self::ELEMS_PER_PAGE - Self::FIRST_PAGE_ELEMS;
 
     pub fn new() -> Option<Self> {
@@ -39,6 +40,20 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
         Some(OsPool::new_multiple::<N>()?.map(Self::from_pool))
     }
 
+
+
+    pub const fn element_size() -> usize {
+        SIZE
+    }
+
+    const fn align_up(value: usize, align: usize) -> usize {
+        let rem = value % align;
+        if rem == 0 {
+            value
+        } else {
+            value + (align - rem)
+        }
+    }
     const fn header_ptr(page: NonNull<u8>, page_idx: usize) -> NonNull<u8> {
         unsafe {
             page.cast::<u8>()
