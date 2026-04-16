@@ -11,6 +11,11 @@ pub struct ArenaAlloc<const SIZE: usize> {
     pool: OsPool,
 }
 
+/// page index > 0
+/// [ arena free(slot bits) | gc new | gc marked | gc needs_drop | align pad | slots... ]
+///
+/// page index 0 as returned by pool
+/// [ group header | arena free(slot bits) | gc new | gc marked | gc needs_drop | align pad | slots... ]
 impl<const SIZE: usize> ArenaAlloc<SIZE> {
     const _ELEMS_PER_PAGE_NAIVE: usize = PAGE_SIZE / SIZE;
 
