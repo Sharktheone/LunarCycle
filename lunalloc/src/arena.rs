@@ -181,11 +181,25 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
 
         free_bitmap.set(slot, true);
 
-        if free_bitmap.first_one() < page_elements {
+        let free_slots = free_bitmap.first_one();
+
+        if free_slots < page_elements {
             // This page is no longer full, mark it as such in the pool
             unsafe {
                 self.pool.mark_page_not_full(group_idx, page_idx);
             }
+        }
+
+        if free_slots >= page_elements {
+            //TODO: we should group operations like that
+            if let Some(page_idx) = NonZeroUsize::new(page_idx) {
+                // This page is now completely free, we can return it to the pool
+                unsafe {
+                    self.pool.decommit_page(group_idx, page_idx);
+                }
+            }
+
+            //TODO: check if the full group is now free and decommit it if so
         }
 
         Some(())
