@@ -46,6 +46,123 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
         SIZE
     }
 
+    pub fn pool_stats(&self) -> crate::ospool::OsPoolStats {
+        self.pool.stats()
+    }
+
+    pub fn stats(&mut self) -> ArenaStats {
+        let pool_stats = self.pool.stats();
+        let mut stats = ArenaStats {
+            pool_pages_marked_free: pool_stats.pages_marked_free,
+            committed_pages_with_free_slots: pool_stats.committed_pages_marked_free,
+            committed_pages: pool_stats.allocated_pages,
+            ..ArenaStats::default()
+        };
+        stats.pages_marked_full = stats
+            .committed_pages
+            .saturating_sub(stats.committed_pages_with_free_slots);
+
+        for group_idx in 0..self.pool.total_groups() {
+            if !self.pool.group_committed(group_idx) {
+                continue;
+            }
+
+            for page_idx in 0..crate::ospool::OsPool::group_size() {
+                if !self
+                    .pool
+                    .page_allocated(group_idx, page_idx)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
+                let page = self
+                    .pool
+                    .page_stripped(group_idx, page_idx)
+                    .expect("page exists");
+                let free_bitmap = unsafe { self.free_bitmap(page, page_idx) };
+                let page_stats = free_bitmap.stats(Self::page_elements(page_idx));
+                stats.slot_free += page_stats.set;
+                stats.slot_used += page_stats.clear;
+            }
+        }
+
+        stats
+    }
+
+    fn is_empty(&mut self) -> bool {
+        for group_idx in 0..self.pool.total_groups() {
+            if !self.pool.group_committed(group_idx) {
+                continue;
+            }
+
+            if !self.group_is_empty(group_idx) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn group_is_empty(&mut self, group_idx: usize) -> bool {
+        for page_idx in 0..OsPool::group_size() {
+            if !self
+                .pool
+                .page_allocated(group_idx, page_idx)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let Some(page) = self
+                .pool
+                .page_stripped(group_idx, page_idx) else {
+                continue;
+            };
+
+            let free_bitmap = unsafe { self.free_bitmap(page, page_idx) };
+            if free_bitmap.first_one() < Self::page_elements(page_idx) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn allocated_slots(&mut self) -> usize {
+        let mut allocated = 0;
+        for group_idx in 0..self.pool.total_groups() {
+            if !self.pool.group_committed(group_idx) {
+                continue;
+            }
+
+            for page_idx in 0..OsPool::group_size() {
+                if !self
+                    .pool
+                    .page_allocated(group_idx, page_idx)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
+                let Some(page) = self
+                    .pool
+                    .page_stripped(group_idx, page_idx) else {
+                    continue;
+                };
+
+
+
+                allocated += self.allocated_slots_on_page(page, page_idx);
+            }
+        }
+        allocated
+    }
+
+    fn allocated_slots_on_page(&mut self, page: NonNull<u8>, page_idx: usize) -> usize {
+        let free_bitmap = unsafe { self.free_bitmap(page, page_idx) };
+        let free_slots = free_bitmap.first_one();
+        Self::page_elements(page_idx) - free_slots
+    }
+
     const fn align_up(value: usize, align: usize) -> usize {
         let rem = value % align;
         if rem == 0 {
@@ -199,7 +316,11 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
                 }
             }
 
-            //TODO: check if the full group is now free and decommit it if so
+            if self.group_is_empty(group_idx) {
+                unsafe {
+                    self.pool.decommit_group(group_idx);
+                }
+            }
         }
 
         Some(())
