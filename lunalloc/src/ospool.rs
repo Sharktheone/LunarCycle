@@ -27,6 +27,18 @@ pub struct OsPool {
     next: Option<NonNull<Self>>,
 }
 
+/// pool memory
+/// [ group0 ][ group1 ] ... [ group511 ]
+///
+/// group layout
+/// [ group header | first page | page1 | page2 | ... ]
+///
+/// group header
+/// [ free(page bits) | allocated(page bits) ]
+///
+/// page bits
+/// [ free(page bits)      ] => committed pages with free arena slots + uncommitted pages
+/// [ allocated(page bits) ] => committed pages only
 impl OsPool {
     pub fn new() -> Option<Self> {
         let size = NonZeroUsize::new(POOL_SIZE)?;

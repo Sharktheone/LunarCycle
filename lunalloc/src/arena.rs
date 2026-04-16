@@ -11,11 +11,28 @@ pub struct ArenaAlloc<const SIZE: usize> {
     pool: OsPool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ArenaStats {
+    pub pool_pages_marked_free: usize,
+    pub committed_pages_with_free_slots: usize,
+    pub pages_marked_full: usize,
+    pub committed_pages: usize,
+    pub slot_free: usize,
+    pub slot_used: usize,
+}
+
 /// page index > 0
 /// [ arena free(slot bits) | gc new | gc marked | gc needs_drop | align pad | slots... ]
 ///
 /// page index 0 as returned by pool
 /// [ group header | arena free(slot bits) | gc new | gc marked | gc needs_drop | align pad | slots... ]
+///
+/// first-page pointer invariants
+/// pool `page_stripped(..., 0)`         => group base, includes group header prefix
+/// arena `header_ptr(page, 0)`          => skips group header, lands on arena slot bitmaps
+/// arena `commit_first_page(&mut pg.first)` => ptr already at first-page payload base
+/// arena `first_page_header_ptr(..)`    => same arena slot-bitmap address as `header_ptr(_, 0)`
+
 impl<const SIZE: usize> ArenaAlloc<SIZE> {
     const _ELEMS_PER_PAGE_NAIVE: usize = PAGE_SIZE / SIZE;
 
