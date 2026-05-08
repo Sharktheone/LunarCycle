@@ -2,8 +2,9 @@
 #[cfg(not(any(windows, unix)))]
 extern crate alloc;
 
-mod arena;
-mod bitmap;
+pub mod arena;
+pub mod bitmap;
 #[cfg(any(windows, unix))]
 pub mod os;
 mod ospool;
+pub mod ospool;
