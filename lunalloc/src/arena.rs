@@ -44,7 +44,7 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
 
     const FIRST_PAGE_HEADER_BYTES: usize = HEADER_SIZE;
     const FIRST_PAGE_DATA_OFFSET: usize =
-        Self::align_up (Self::FIRST_PAGE_HEADER_BYTES + Self::HEADER_BYTES, SIZE);
+        Self::align_up(Self::FIRST_PAGE_HEADER_BYTES + Self::HEADER_BYTES, SIZE);
     const FIRST_PAGE_ELEMS: usize = (PAGE_SIZE - Self::FIRST_PAGE_DATA_OFFSET) / SIZE;
     const FIRST_PAGE_ELEMS_LESS: usize = Self::ELEMS_PER_PAGE - Self::FIRST_PAGE_ELEMS;
 
@@ -61,8 +61,6 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
     pub fn new_multiple<const N: usize>() -> Option<[Self; N]> {
         Some(OsPool::new_multiple::<N>()?.map(|p| unsafe { Self::from_pool(p) }))
     }
-
-
 
     pub const fn element_size() -> usize {
         SIZE
@@ -225,7 +223,7 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
         &mut self,
         page: NonNull<u8>,
         page_idx: usize,
-    ) -> BitmapRef {
+    ) -> BitmapRef<'_> {
         let header = Self::header_ptr(page, page_idx);
 
         unsafe { Self::bitmap_ref_header::<OFFSET>(header) }
@@ -282,7 +280,7 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
 
         free_bitmap.set(slot, false);
 
-        if free_bitmap.first_one() >= Self::page_elements(page_idx)  {
+        if free_bitmap.first_one() >= Self::page_elements(page_idx) {
             // This page is now full, mark it as such in the pool
             unsafe {
                 self.pool.mark_page_full(group, page_idx);
