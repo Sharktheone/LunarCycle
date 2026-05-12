@@ -288,7 +288,9 @@ impl OsPool {
         }
         // Safety: the ptr is aligned and non-null, plus there are no other references.
         let pg = unsafe { group_ptr.as_mut() };
-        pg.header.free.set_all();
+        pg.header.free = Bitmap::all();
+        pg.header.allocated = Bitmap::new();
+        pg.header.free.set_bits(0, GROUP_SIZE, true);
         pg.header.allocated.set_bits(0, pages, true);
 
         CB::commit_first_page(unsafe { NonNull::new_unchecked(&mut pg.first) })?;
