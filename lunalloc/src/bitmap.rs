@@ -1,3 +1,10 @@
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BitmapStats {
+    pub bits: usize,
+    pub set: usize,
+    pub clear: usize,
+}
+
 pub struct Bitmap<const SIZE: usize> {
     inner: [u64; SIZE],
 }
@@ -72,6 +79,29 @@ impl<const SIZE: usize> Bitmap<SIZE> {
     pub fn has_set(&self) -> bool {
         self.inner.iter().any(|&block| block != 0)
     }
+
+    pub fn stats(&self, bits: usize) -> BitmapStats {
+        assert!(bits <= SIZE * 64);
+
+        let full_words = bits / 64;
+        let tail_bits = bits % 64;
+        let mut set = 0;
+
+        for block in &self.inner[..full_words] {
+            set += block.count_ones() as usize;
+        }
+
+        if tail_bits != 0 {
+            let mask = (1u64 << tail_bits) - 1;
+            set += (self.inner[full_words] & mask).count_ones() as usize;
+        }
+
+        BitmapStats {
+            bits,
+            set,
+            clear: bits - set,
+        }
+    }
 }
 
 pub struct BitmapRef<'a> {
@@ -120,6 +150,29 @@ impl<'a> BitmapRef<'a> {
     pub fn set_bits(&mut self, start: usize, count: usize, val: bool) {
         for i in 0..count {
             self.set(start + i, val);
+        }
+    }
+
+    pub fn stats(&self, bits: usize) -> BitmapStats {
+        assert!(bits <= self.inner.len() * 64);
+
+        let full_words = bits / 64;
+        let tail_bits = bits % 64;
+        let mut set = 0;
+
+        for block in &self.inner[..full_words] {
+            set += block.count_ones() as usize;
+        }
+
+        if tail_bits != 0 {
+            let mask = (1u64 << tail_bits) - 1;
+            set += (self.inner[full_words] & mask).count_ones() as usize;
+        }
+
+        BitmapStats {
+            bits,
+            set,
+            clear: bits - set,
         }
     }
 }
