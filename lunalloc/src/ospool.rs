@@ -148,7 +148,8 @@ impl OsPool {
     ) -> Option<(NonNull<u8>, usize)> {
         if group_idx >= NUM_GROUPS {
             return unsafe {
-                self.next?.as_mut()
+                self.next?
+                    .as_mut()
                     .get_next_free_page_on_group::<CB>(group_idx - NUM_GROUPS)
             };
         }
@@ -219,7 +220,11 @@ impl OsPool {
 
     pub unsafe fn mark_page_full(&mut self, group_idx: usize, page: usize) -> Option<()> {
         if group_idx >= NUM_GROUPS {
-            return unsafe { self.next?.as_mut().mark_page_full(group_idx - NUM_GROUPS, page) };
+            return unsafe {
+                self.next?
+                    .as_mut()
+                    .mark_page_full(group_idx - NUM_GROUPS, page)
+            };
         }
 
         let mut group_ptr = self.group(group_idx)?;
@@ -243,7 +248,8 @@ impl OsPool {
     pub unsafe fn mark_page_not_full(&mut self, group_idx: usize, page: usize) -> Option<()> {
         if group_idx >= NUM_GROUPS {
             return unsafe {
-                self.next?.as_mut()
+                self.next?
+                    .as_mut()
                     .mark_page_not_full(group_idx - NUM_GROUPS, page)
             };
         }
@@ -269,7 +275,11 @@ impl OsPool {
         pages: usize,
     ) -> Option<()> {
         if group >= NUM_GROUPS {
-            return unsafe { self.next?.as_mut().commit_group::<CB>(group - NUM_GROUPS, pages) };
+            return unsafe {
+                self.next?
+                    .as_mut()
+                    .commit_group::<CB>(group - NUM_GROUPS, pages)
+            };
         }
         let commit_size = pages.max(1) * PAGE_SIZE;
 
@@ -300,7 +310,6 @@ impl OsPool {
 
         self.committed.set(group, true);
 
-        
         Some(())
     }
 
@@ -330,7 +339,11 @@ impl OsPool {
         page: NonZeroUsize,
     ) -> Option<()> {
         if group >= NUM_GROUPS {
-            return unsafe { self.next?.as_mut().commit_page::<CB>(group - NUM_GROUPS, page) };
+            return unsafe {
+                self.next?
+                    .as_mut()
+                    .commit_page::<CB>(group - NUM_GROUPS, page)
+            };
         }
         let mut group_ptr = self.group(group)?;
         let page_ptr = self.page(group, page)?;
@@ -362,7 +375,8 @@ impl OsPool {
     ) -> Option<()> {
         if group >= NUM_GROUPS {
             return unsafe {
-                self.next?.as_mut()
+                self.next?
+                    .as_mut()
                     .commit_pages::<CB>(group - NUM_GROUPS, page, count)
             };
         }
@@ -420,7 +434,8 @@ impl OsPool {
     ) -> Option<()> {
         if group >= NUM_GROUPS {
             return unsafe {
-                self.next?.as_mut()
+                self.next?
+                    .as_mut()
                     .decommit_pages(group - NUM_GROUPS, page, count)
             };
         }
