@@ -201,7 +201,7 @@ impl<const SIZE: usize> ArenaAlloc<SIZE> {
     }
 
     const fn first_page_header_ptr(page: NonNull<u8>) -> NonNull<u8> {
-        unsafe { page.cast::<u8>().add(Self::FIRST_PAGE_HEADER_BYTES) }
+        page.cast::<u8>()
     }
 
     const fn page_elements(page_idx: usize) -> usize {
