@@ -140,6 +140,84 @@ impl OsPool {
         Some(group.header.allocated.get(page_idx))
     }
 
+    pub fn page_free(&self, group_idx: usize, page_idx: usize) -> Option<bool> {
+        if page_idx >= GROUP_SIZE {
+            return None;
+        }
+
+        if group_idx >= NUM_GROUPS {
+            return unsafe {
+                self.next?
+                    .as_ref()
+                    .page_free(group_idx - NUM_GROUPS, page_idx)
+            };
+        }
+
+        if !self.committed.get(group_idx) {
+            return Some(true);
+        }
+
+        let group = unsafe { self.group(group_idx)?.as_ref() };
+        Some(group.header.free.get(page_idx))
+    }
+
+    pub fn page_bitmap_stats(&self, group_idx: usize) -> Option<(BitmapStats, BitmapStats)> {
+        if group_idx >= NUM_GROUPS {
+            return unsafe {
+                self.next?
+                    .as_ref()
+                    .page_bitmap_stats(group_idx - NUM_GROUPS)
+            };
+        }
+
+        if !self.committed.get(group_idx) {
+            return None;
+        }
+
+        let group = unsafe { self.group(group_idx)?.as_ref() };
+        Some((
+            group.header.free.stats(GROUP_SIZE),
+            group.header.allocated.stats(GROUP_SIZE),
+        ))
+    }
+
+    pub fn stats(&self) -> OsPoolStats {
+        let mut stats = OsPoolStats {
+            groups_with_free_pages: self.free.stats(NUM_GROUPS).set,
+            committed_groups: self.committed.stats(NUM_GROUPS).set,
+            ..OsPoolStats::default()
+        };
+
+        for group_idx in 0..NUM_GROUPS {
+            if !self.committed.get(group_idx) {
+                continue;
+            }
+
+            let group = unsafe { self.group(group_idx).expect("committed group").as_ref() };
+            let free = group.header.free.stats(GROUP_SIZE).set;
+            let allocated = group.header.allocated.stats(GROUP_SIZE).set;
+            stats.pages_marked_free += free;
+            stats.allocated_pages += allocated;
+
+            for page_idx in 0..GROUP_SIZE {
+                if group.header.free.get(page_idx) && group.header.allocated.get(page_idx) {
+                    stats.committed_pages_marked_free += 1;
+                }
+            }
+        }
+
+        if let Some(next) = self.next {
+            let next_stats = unsafe { next.as_ref().stats() };
+            stats.groups_with_free_pages += next_stats.groups_with_free_pages;
+            stats.committed_groups += next_stats.committed_groups;
+            stats.pages_marked_free += next_stats.pages_marked_free;
+            stats.committed_pages_marked_free += next_stats.committed_pages_marked_free;
+            stats.allocated_pages += next_stats.allocated_pages;
+        }
+
+        stats
+    }
+
     pub fn group(&self, group: usize) -> Option<NonNull<PageGroup>> {
         if group >= NUM_GROUPS {
             // core::hint::cold_path();
