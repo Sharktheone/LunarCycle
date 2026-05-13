@@ -90,6 +90,56 @@ impl OsPool {
                 .is_some_and(|next| unsafe { next.as_ref().has_allocated() })
     }
 
+    pub const fn group_count() -> usize {
+        NUM_GROUPS
+    }
+
+    pub const fn group_size() -> usize {
+        GROUP_SIZE
+    }
+
+    pub const fn default_commit_pages() -> usize {
+        DEFAULT_COMMIT_PAGES
+    }
+
+    pub fn total_groups(&self) -> usize {
+        NUM_GROUPS
+            + self
+                .next
+                .map_or(0, |next| unsafe { next.as_ref().total_groups() })
+    }
+
+    pub fn group_committed(&self, group_idx: usize) -> bool {
+        if group_idx >= NUM_GROUPS {
+            return self.next.is_some_and(|next| unsafe {
+                next.as_ref().group_committed(group_idx - NUM_GROUPS)
+            });
+        }
+
+        self.committed.get(group_idx)
+    }
+
+    pub fn page_allocated(&self, group_idx: usize, page_idx: usize) -> Option<bool> {
+        if page_idx >= GROUP_SIZE {
+            return None;
+        }
+
+        if group_idx >= NUM_GROUPS {
+            return unsafe {
+                self.next?
+                    .as_ref()
+                    .page_allocated(group_idx - NUM_GROUPS, page_idx)
+            };
+        }
+
+        if !self.committed.get(group_idx) {
+            return Some(false);
+        }
+
+        let group = unsafe { self.group(group_idx)?.as_ref() };
+        Some(group.header.allocated.get(page_idx))
+    }
+
     pub fn group(&self, group: usize) -> Option<NonNull<PageGroup>> {
         if group >= NUM_GROUPS {
             // core::hint::cold_path();
